@@ -1,2 +1,25 @@
 # 12mp3
-Arduino MP3 player for kidz
+Arduino MP3 player for kidz. (Inspired by Hörbert which can only play WAV and 9 albums and has no display)
+No text for small kidz -> TFT to display a picture of the album.
+Buttons:
+- Track Fwd
+- Track Bwd
+- Album Fwd
+- Album Bwd
+
+## Hardware
+ - Arduino Uno R3
+ - Adafruit Music Maker Shield
+ - Adafruit 1.44" Color TFT with Micro SD Socket
+ - some buttons
+ - any Micro SD card
+
+## Code
+https://github.com/golesny/12mp3/tree/master/mp3player
+
+## Links and References
+ - https://learn.adafruit.com/adafruit-music-maker-shield-vs1053-mp3-wav-wave-ogg-vorbis-player/library-reference
+ - https://learn.adafruit.com/adafruit-1-44-color-tft-with-micro-sd-socket/wiring-and-test
+ - https://www.arduino.cc/en/Reference/SD
+ - https://github.com/adafruit/Adafruit_VS1053_Library/blob/master/Adafruit_VS1053.h
+ - https://www.hoerbert.com/
