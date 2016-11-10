@@ -14,7 +14,6 @@ const char ERR_FILE_NOT_FOUND[] PROGMEM     = " File not found:";
 const char ERR_NO_SD_CARD[] PROGMEM         = " SD not found!";
 const char ERR_DREQ_PIN[] PROGMEM           = " DREQ not an interrupt!";
 
-const char ERR_NO_ROOT_DIR[] PROGMEM        = " rootDir not initialized";
 const char MSG_NO_CURR_DIR[] PROGMEM        = " no currentDir";
 const char MSG_LOADING[] PROGMEM            = " Loading:";
 const char MSG_DEBUG[] PROGMEM              = "DEBUG:";
@@ -34,6 +33,17 @@ const char ERR_OPEN_FILE[] PROGMEM          = " Could not open file ";
 const char MSG_START_PLAY[] PROGMEM         = " Start playing ";
 const char MSG_STOP_PLAY[] PROGMEM          = " Stop playing ";
 const char MSG_BUTTON[] PROGMEM             = " Button: ";
+const char MSG_NEW_INDEX[] PROGMEM          = " Creating new index ";
+const char MSG_WRITE_INDEX[] PROGMEM        = " Writing index ";
+const char MSG_CLOSING_INDEX[] PROGMEM      = " Closing index ";
+const char MSG_COULD_NOT_SEEK_ZERO[] PROGMEM= " Could not seek(0) ";
+const char MSG_OPEN_FILE[] PROGMEM          = " Open file ";
+const char MSG_CLOSE_FILE[] PROGMEM         = " Closing file ";
+const char MSG_POS[] PROGMEM                = " Pos ";
+const char MSG_TRACK[] PROGMEM              = " Track ";
+const char MSG_ALBUM[] PROGMEM              = " Album ";
+const char MSG_MAXTRACK[] PROGMEM           = " Max Track ";
+const char MSG_MAXALBUM[] PROGMEM           = " Max Album ";
 
 // For the breakout, you can use any 2 or 3 pins
 // These pins will also work for the 1.8" TFT shield
@@ -58,9 +68,16 @@ const char MSG_BUTTON[] PROGMEM             = " Button: ";
 #define BUTTON_GPIO_ALBUM_FWD  3
 #define BUTTON_GPIO_ALBUM_BWD  4
 
-File rootDir;
-File currentDir;
+#define IDX_LINE_LENGTH 24
+
+int currentAlbum;
+int currentTrack;
+int currentMaxTrack;
+int maxAlbum;
+
 byte buttonPressed;
+char trackpath[IDX_LINE_LENGTH + 1];
+char idxpath[IDX_LINE_LENGTH + 1];
 
 // Option 1 (recommended): must use the hardware SPI pins
 // (for UNO thats sclk = 13 and sid = 11) and pin 10 must be
@@ -83,15 +100,21 @@ void setup() {
      mp3player_fatal(__LINE__, ERR_NO_VS1053);
   }  
 
-  musicPlayer.sineTest(0x44, 500);    // Make a tone to indicate VS1053 is working
+  musicPlayer.sineTest(0x44, 250);    // Make a tone to indicate VS1053 is working
  
   if (!SD.begin(CARDCS)) {
     mp3player_fatal(__LINE__, ERR_NO_SD_CARD);
   }
-  rootDir = SD.open("/");
+  currentTrack = 0;
+  currentAlbum = 0;
+  mp3player_dbg(__LINE__, MSG_NEW_INDEX);
+  maxAlbum = updateIndex("/");
+  mp3player_dbgi(__LINE__, MSG_MAXALBUM, maxAlbum);
+  char* album = getIndexEntry("/", currentAlbum);
+  currentMaxTrack = updateIndex(album);  
   
   // Set volume for left, right channels. lower numbers == louder volume!
-  musicPlayer.setVolume(20,20);
+  musicPlayer.setVolume(10,10);
   
   // This option uses a pin interrupt. No timers required! But DREQ
   // must be on an interrupt pin. For Uno/Duemilanove/Diecimilla
@@ -104,127 +127,187 @@ void setup() {
   resetButtons();
   // setup pins
   musicPlayer.GPIO_pinMode(BUTTON_GPIO_TRACK_FWD, INPUT);
+  musicPlayer.GPIO_pinMode(BUTTON_GPIO_TRACK_BWD, INPUT);
+  musicPlayer.GPIO_pinMode(BUTTON_GPIO_ALBUM_FWD, INPUT);
+  musicPlayer.GPIO_pinMode(BUTTON_GPIO_ALBUM_BWD, INPUT);
 }
 
 void loop() {
   mp3player_dbg(__LINE__, MSG_LOOP_START);
-  //int bt = getPressedButton();
-  //char* trackname = updateCurrentAlbumTrack(BT_NONE);
   
   if (musicPlayer.playingMusic) {
     mp3player_dbg(__LINE__, MSG_STOP_PLAY, musicPlayer.currentTrack.name());
     musicPlayer.stopPlaying();
   }
-  const char* trackpath = getNextTrackpath();
+  const char* trackpath = getCurrentTrackpath();
   mp3player_dbg(__LINE__, MSG_START_PLAY, trackpath);
   if (! musicPlayer.startPlayingFile(trackpath)) {
     mp3player_fatal(__LINE__, ERR_OPEN_FILE, trackpath);
   }  
-  
-  resetButtons();
-  
   // file is now playing in the 'background' so now's a good time
   // to do something else like handling LEDs or buttons :)
-  // wait for a button
+  waitForButtonOrTrackEnd();
+  delay(250); 
+}
+
+void waitForButtonOrTrackEnd() {  
+  resetButtons();
   while (buttonPressed == 0 && musicPlayer.playingMusic) {
     if (musicPlayer.GPIO_digitalRead(BUTTON_GPIO_TRACK_FWD) == HIGH) {
       buttonPressed = BUTTON_GPIO_TRACK_FWD;
+      mp3player_dbg(__LINE__, MSG_BUTTON, ">");      
     }
     if (musicPlayer.GPIO_digitalRead(BUTTON_GPIO_TRACK_BWD) == HIGH) {
       buttonPressed = BUTTON_GPIO_TRACK_BWD;
+      mp3player_dbg(__LINE__, MSG_BUTTON, "<");
     }
     if (musicPlayer.GPIO_digitalRead(BUTTON_GPIO_ALBUM_FWD) == HIGH) {
       buttonPressed = BUTTON_GPIO_ALBUM_FWD;
+      mp3player_dbg(__LINE__, MSG_BUTTON, ">|");
     }
     if (musicPlayer.GPIO_digitalRead(BUTTON_GPIO_ALBUM_BWD) == HIGH) {
       buttonPressed = BUTTON_GPIO_ALBUM_BWD;
+      mp3player_dbg(__LINE__, MSG_BUTTON, "|<");
     }
-  }    
-  if (buttonPressed > 0) {
-    char c[] = {'-','\0'};
-    c[0] = buttonPressed + 48;
-    mp3player_dbg(__LINE__, MSG_BUTTON, &c[0]);
-    // do Action
-    resetButtons();
   }
-  //updateCurrentAlbumTrack(bt);    
-  delay(250); 
+  handleUserAction(buttonPressed);
+}
+
+void handleUserAction(byte action) {
+  // handle user action
+  if (action > 0) {    
+    if (action == BUTTON_GPIO_TRACK_FWD) {
+      currentTrack++;
+      if (currentTrack > currentMaxTrack) {
+        action = BUTTON_GPIO_ALBUM_FWD;
+      }
+    }
+    if (action == BUTTON_GPIO_TRACK_BWD) {
+      currentTrack--;
+      if (currentTrack < 0) {
+        action = BUTTON_GPIO_ALBUM_BWD;
+      }
+    }
+    if (action == BUTTON_GPIO_ALBUM_FWD) {
+      currentTrack = 0;
+      currentAlbum++;
+      if (currentAlbum > maxAlbum) {
+        currentAlbum = 0;        
+      }
+      char* album = getIndexEntry("/", currentAlbum);
+      currentMaxTrack = updateIndex(album);
+    }
+    if (action == BUTTON_GPIO_ALBUM_BWD) {
+      currentTrack = 0;
+      currentAlbum--;
+      if (currentAlbum < 0) {
+        currentAlbum = maxAlbum;
+      }
+      char* album = getIndexEntry("/", currentAlbum);
+      currentMaxTrack = updateIndex(album);
+    }
+  }
+  mp3player_dbgi(__LINE__, MSG_ALBUM, currentAlbum);
+  mp3player_dbgi(__LINE__, MSG_TRACK, currentTrack);
+  mp3player_dbgi(__LINE__, MSG_MAXTRACK, currentMaxTrack);
 }
 
 void resetButtons() {
   buttonPressed = 0;
 }
 
-const char* getNextTrackpath() {
-  static char trackpath[22];
-  trackpath[0] = '/';
-
-  if (!rootDir) {
-    mp3player_fatal(__LINE__, ERR_NO_ROOT_DIR);
-  }
-  
-  if (!currentDir) {
-    mp3player_dbg(__LINE__, MSG_NO_CURRENT_DIR);
-  } else {
-    // search next track in current dir
-    while (true) {
-      File t = currentDir.openNextFile();
-      if (!t) {
-        // last file reached
-        mp3player_dbg(__LINE__, MSG_LAST_TRACK); //  Simulate next album button press
-        break;
-      } else if (EndsWithMp3(t.name())) {       
-        strcpy(&trackpath[1], currentDir.name());
-        size_t len = strlen(trackpath);
-        trackpath[len] = '/';
-        strcpy(&trackpath[len+1], t.name());
-        mp3player_dbg(__LINE__, MSG_PATH, trackpath);
-        t.close();
-        return trackpath;
-      } else {
-        mp3player_dbg(__LINE__, MSG_IGNORE, t.name());
-        t.close();
-      }
-    }
-  }
-
-  bool last = false;
-  while (true) {      
-    File d = rootDir.openNextFile();
-    if (!d) {
-      // none found or last
-      if (last == true) {
-        mp3player_fatal(__LINE__, MSG_NO_DIRS);
-      }
-      mp3player_dbg(__LINE__, MSG_REWINDING, rootDir.name());
-      rootDir.rewindDirectory();
-      last = true;        
-    } else if (d.isDirectory() && strcmp(d.name(), "SYSTEM~1") != 0) {
-       // found a valid directory
-       strcpy(&trackpath[1], d.name());
-       mp3player_dbg(__LINE__, MSG_VALID_ALBUM, d.name());
-       if (!(!currentDir)) {
-         mp3player_dbg(__LINE__, MSG_CLOSING, currentDir.name());
-         currentDir.close();
-       }       
-       currentDir = d;
-       bmpDrawCover(currentDir);
-       return getNextTrackpath();
-       break;
-    } else {
-      mp3player_dbg(__LINE__, MSG_IGNORING, d.name());
-      d.close();      
-    }
-  }
+char* getIndexEntry(const char* path, int number) {
+  // read path from index
+  char* f = getIndexFile(path);
+  File fIdx = SD.open(f);  
+  fIdx.seek((IDX_LINE_LENGTH + 3) * number);
+  mp3player_dbgi(__LINE__, MSG_POS, fIdx.position());
+  fIdx.read(&trackpath[0], IDX_LINE_LENGTH);
+  fIdx.close();  
+  mp3player_dbg(__LINE__, MSG_PATH, &trackpath[0]);
+  trim(trackpath);
+  mp3player_dbg(__LINE__, MSG_PATH, &trackpath[0]);
+  return &trackpath[0];
 }
 
-void bmpDrawCover(File dir) {
-  char coverpath[20];
-  coverpath[0] = '/';
-  strcpy(&coverpath[1], dir.name());
-  size_t len = strlen(dir.name());
-  coverpath[len+1] = '/';
-  strcpy(&coverpath[len+2], "cover.bmp");
+const char* getCurrentTrackpath() {  
+  bool last = false;
+  char* album = getIndexEntry("/", currentAlbum);  
+  if (currentTrack == 0){
+    bmpDrawCover(album);
+  }
+  char* track = getIndexEntry(album, currentTrack);  
+  return track;  
+}
+
+int updateIndex(const char* dir) {
+  int count = -1;
+  int len = 0;
+  // create a new index
+  char* f = getIndexFile(dir);
+  File currentDir = SD.open(dir);
+  mp3player_dbg(__LINE__, MSG_NEW_INDEX, f);
+  File fIdx = SD.open(f, FILE_WRITE | O_TRUNC);
+  while (true) {
+    File t = currentDir.openNextFile();
+    mp3player_dbg(__LINE__, MSG_OPEN_FILE, t.name());
+    if (!t) {
+      // last file reached
+      mp3player_dbg(__LINE__, MSG_CLOSING_INDEX, f);
+      break;
+    } else if (EndsWithMp3(t.name())) {
+      // in subdirs all MP3s
+      mp3player_dbg(__LINE__, MSG_WRITE_INDEX, t.name());      
+      fIdx.print('/');
+      fIdx.print(currentDir.name());
+      fIdx.print('/');
+      fIdx.print(t.name());
+      len = 2 + strlen(currentDir.name()) + strlen(t.name());
+      count++;
+    } else if (t.isDirectory() && strcmp(t.name(), "SYSTEM~1") != 0) {
+      // in rootDir all directories
+      mp3player_dbg(__LINE__, MSG_WRITE_INDEX, t.name());
+      fIdx.print('/');
+      fIdx.print(t.name());
+      len = 1 + strlen(t.name());
+      count++;
+    }
+    // finish the line with fixed length (for easier read in)
+    if (len > 0) {
+      while (len < IDX_LINE_LENGTH) {
+        fIdx.print(' ');
+        len++;
+      }
+      fIdx.println(' ');
+    }
+    // close file
+    t.close();
+  }
+  fIdx.close();
+  currentDir.close();
+  return count;
+}
+
+char* getIndexFile(const char* dir) {
+  idxpath[0] = '/';
+  size_t len = 1;
+  if (strcmp(dir, "/") != 0) {
+    // not root dir  
+    strcpy(&idxpath[0], dir);    
+    len = strlen(dir);
+    idxpath[len++] = '/';
+  }  
+  strcpy(&idxpath[len], "_IDX");
+  mp3player_dbg(__LINE__, MSG_PATH, &idxpath[0]);
+  return &idxpath[0];
+}
+
+void bmpDrawCover(const char* dir) {
+  char coverpath[20];  
+  strcpy(&coverpath[0], dir);
+  size_t len = strlen(dir);
+  coverpath[len] = '/';
+  strcpy(&coverpath[len+1], "cover.bmp");
   bmpDraw(coverpath, 0, 0);
 }
 
@@ -271,85 +354,15 @@ void mp3player_dbg(const int lineno, const char msg[], const char *param) {
   Serial.println(param);  // neue Zeile
 }
 
-/*int getPressedButton() {
-  float btTrack = analogRead(BUTTON_TRACK_PIN);
-  float btAlbum = analogRead(BUTTON_ALBUM_PIN);
-  if (btTrack < 1020) {
-    Serial.print("[DEBUG] Track V:");
-    Serial.println(btTrack);
-    //Serial.print("[DEBUG] Album V:");
-    //Serial.println(btAlbum);
+void mp3player_dbgi(const int lineno, const char msg[], long param) {
+  Serial.print(lineno);
+  Serial.print(":");
+  char c;
+  while((c = pgm_read_byte(msg++))) { // alle chars lesen
+    Serial.write(c);   // und ausgeben
   }
-  if (btTrack > 1000) {
-    return BT_NONE;
-  } else if (btTrack > 325) {
-    return BT_TRACK_FWD;
-  } else if (btTrack > 90) {
-    return BT_TRACK_BWD;
-  }
-
-    if (btAlbum > 1000) {
-    return BT_NONE;
-  } else if (btAlbum > 325) {
-    return BT_ALBUM_FWD;
-  } else if (btAlbum > 90) {
-    return BT_ALBUM_BWD;
-  }
-}*/
-
-/*char* updateCurrentAlbumTrack(int bt) {
-  char* trackname = "test";
-if (bt != BT_NONE) {
-    if (lastButton != bt) {
-    lastButton = bt;
-  
-    switch (bt) {
-      case BT_TRACK_FWD:
-      testdrawtext(">", ST7735_WHITE);
-      Serial.println(">");
-      configuration.track++;
-      if (configuration.track >= maxTrack[configuration.album]) {
-        configuration.track = 0;
-      }
-      break;
-      case BT_TRACK_BWD:
-      testdrawtext("<", ST7735_WHITE);
-      Serial.println("<");
-      configuration.track--;
-      if (configuration.track < 0) {
-        configuration.track = maxTrack[configuration.album] - 1;
-      }
-      break;
-      case BT_ALBUM_FWD:
-      testdrawtext(">|", ST7735_WHITE);
-      Serial.println(">|");
-      configuration.album++;
-      if (configuration.album >= maxAlbum) {
-        configuration.album = 0;
-      }
-      configuration.track = 0;
-      break;
-      case BT_ALBUM_BWD:
-      testdrawtext("|<", ST7735_WHITE);
-      Serial.println("|<");
-      configuration.album--;
-      if (configuration.album < 0) {
-        configuration.album = maxAlbum - 1;
-      }
-      configuration.track = 0;
-      break;    
-    }    
-    Serial.print(configuration.album);
-    Serial.print("/");
-    Serial.println(configuration.track);
-
-    EEPROM_writeAnything(0, configuration);
-    }
-  } else {
-    lastButton = BT_NONE;
-  }
-  return trackname;
-}*/
+  Serial.println(param);  // neue Zeile
+}
 
 int EndsWith(const char *str, const char *suffix)
 {
@@ -496,5 +509,14 @@ uint32_t read32(File f) {
   ((uint8_t *)&result)[2] = f.read();
   ((uint8_t *)&result)[3] = f.read(); // MSB
   return result;
+}
+
+void trim(char* s) {
+    char* p = s;
+    int len = strlen(p);    
+    while(isspace(p[len - 1])) p[--len] = 0;
+    //while(* p && isspace(* p)) ++p, --len;
+
+    //memmove(s, p, len + 1);
 }
 
