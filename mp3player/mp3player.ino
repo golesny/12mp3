@@ -13,6 +13,7 @@ const char ERR_BMP_NOT_RECOGNIZED[] PROGMEM = " BMP format not recognized.";
 const char ERR_FILE_NOT_FOUND[] PROGMEM     = " File not found:";
 const char ERR_NO_SD_CARD[] PROGMEM         = " SD not found!";
 const char ERR_DREQ_PIN[] PROGMEM           = " DREQ not an interrupt!";
+const char ERR_NO_FILES_FOUND[] PROGMEM     = " No files found ";
 
 const char MSG_NO_CURR_DIR[] PROGMEM        = " no currentDir";
 const char MSG_LOADING[] PROGMEM            = " Loading:";
@@ -44,6 +45,7 @@ const char MSG_TRACK[] PROGMEM              = " Track ";
 const char MSG_ALBUM[] PROGMEM              = " Album ";
 const char MSG_MAXTRACK[] PROGMEM           = " Max Track ";
 const char MSG_MAXALBUM[] PROGMEM           = " Max Album ";
+const char MSG_READ_TRACK[] PROGMEM           = " Reading Track ";
 
 // For the breakout, you can use any 2 or 3 pins
 // These pins will also work for the 1.8" TFT shield
@@ -190,21 +192,39 @@ void handleUserAction(byte action) {
     }
     if (action == BUTTON_GPIO_ALBUM_FWD) {
       currentTrack = 0;
-      currentAlbum++;
-      if (currentAlbum > maxAlbum) {
-        currentAlbum = 0;        
+      currentMaxTrack = -1;
+      int oldCurrentAlbum = currentAlbum;
+      while (currentMaxTrack == -1) {
+        currentAlbum++;
+        // loop detection
+        if (oldCurrentAlbum == currentAlbum) {
+          mp3player_fatal(__LINE__, ERR_NO_FILES_FOUND); 
+        }
+        // overflow detection
+        if (currentAlbum > maxAlbum) {
+          currentAlbum = 0;        
+        }        
+        char* album = getIndexEntry("/", currentAlbum);
+        currentMaxTrack = updateIndex(album);
       }
-      char* album = getIndexEntry("/", currentAlbum);
-      currentMaxTrack = updateIndex(album);
     }
     if (action == BUTTON_GPIO_ALBUM_BWD) {
       currentTrack = 0;
-      currentAlbum--;
-      if (currentAlbum < 0) {
-        currentAlbum = maxAlbum;
+      currentMaxTrack = -1;
+      int oldCurrentAlbum = currentAlbum;
+      while (currentMaxTrack == -1) {
+        currentAlbum--;
+        // loop detection
+        if (oldCurrentAlbum == currentAlbum) {
+          mp3player_fatal(__LINE__, ERR_NO_FILES_FOUND); 
+        }
+        // overflow detection
+        if (currentAlbum < 0) {
+          currentAlbum = maxAlbum;
+        }        
+        char* album = getIndexEntry("/", currentAlbum);
+        currentMaxTrack = updateIndex(album);
       }
-      char* album = getIndexEntry("/", currentAlbum);
-      currentMaxTrack = updateIndex(album);
     }
   }
   mp3player_dbgi(__LINE__, MSG_ALBUM, currentAlbum);
@@ -236,6 +256,7 @@ const char* getCurrentTrackpath() {
   if (currentTrack == 0){
     bmpDrawCover(album);
   }
+  mp3player_dbgi(__LINE__, MSG_READ_TRACK, currentTrack);
   char* track = getIndexEntry(album, currentTrack);  
   return track;  
 }
@@ -249,28 +270,31 @@ int updateIndex(const char* dir) {
   mp3player_dbg(__LINE__, MSG_NEW_INDEX, f);
   File fIdx = SD.open(f, FILE_WRITE | O_TRUNC);
   while (true) {
-    File t = currentDir.openNextFile();
-    mp3player_dbg(__LINE__, MSG_OPEN_FILE, t.name());
+    File t = currentDir.openNextFile();    
     if (!t) {
       // last file reached
       mp3player_dbg(__LINE__, MSG_CLOSING_INDEX, f);
       break;
-    } else if (EndsWithMp3(t.name())) {
+    }
+    mp3player_dbg(__LINE__, MSG_OPEN_FILE, t.name());
+    if (EndsWithMp3(t.name())) {
+      count++;
       // in subdirs all MP3s
-      mp3player_dbg(__LINE__, MSG_WRITE_INDEX, t.name());      
+      mp3player_dbgi(__LINE__, MSG_WRITE_INDEX, count);      
       fIdx.print('/');
       fIdx.print(currentDir.name());
       fIdx.print('/');
       fIdx.print(t.name());
       len = 2 + strlen(currentDir.name()) + strlen(t.name());
-      count++;
     } else if (t.isDirectory() && strcmp(t.name(), "SYSTEM~1") != 0) {
+      count++;
       // in rootDir all directories
-      mp3player_dbg(__LINE__, MSG_WRITE_INDEX, t.name());
+      mp3player_dbgi(__LINE__, MSG_WRITE_INDEX, count);
       fIdx.print('/');
       fIdx.print(t.name());
-      len = 1 + strlen(t.name());
-      count++;
+      len = 1 + strlen(t.name());      
+    } else {
+      mp3player_dbg(__LINE__, MSG_IGNORING, t.name());
     }
     // finish the line with fixed length (for easier read in)
     if (len > 0) {
