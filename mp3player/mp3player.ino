@@ -14,7 +14,9 @@ const char ERR_FILE_NOT_FOUND[] PROGMEM     = " File not found:";
 const char ERR_NO_SD_CARD[] PROGMEM         = " SD not found!";
 const char ERR_DREQ_PIN[] PROGMEM           = " DREQ not an interrupt!";
 const char ERR_NO_FILES_FOUND[] PROGMEM     = " No files found ";
+const char ERR_SEEK_FAILED[] PROGMEM        = " seek in file failed to pos ";
 
+const char MSG_SETUP[] PROGMEM              = " setup";
 const char MSG_NO_CURR_DIR[] PROGMEM        = " no currentDir";
 const char MSG_LOADING[] PROGMEM            = " Loading:";
 const char MSG_DEBUG[] PROGMEM              = "DEBUG:";
@@ -34,18 +36,19 @@ const char ERR_OPEN_FILE[] PROGMEM          = " Could not open file ";
 const char MSG_START_PLAY[] PROGMEM         = " Start playing ";
 const char MSG_STOP_PLAY[] PROGMEM          = " Stop playing ";
 const char MSG_BUTTON[] PROGMEM             = " Button: ";
-const char MSG_NEW_INDEX[] PROGMEM          = " Creating new index ";
+const char MSG_NEW_INDEX[] PROGMEM          = " Creating new index in ";
 const char MSG_WRITE_INDEX[] PROGMEM        = " Writing index ";
 const char MSG_CLOSING_INDEX[] PROGMEM      = " Closing index ";
 const char MSG_COULD_NOT_SEEK_ZERO[] PROGMEM= " Could not seek(0) ";
 const char MSG_OPEN_FILE[] PROGMEM          = " Open file ";
 const char MSG_CLOSE_FILE[] PROGMEM         = " Closing file ";
 const char MSG_POS[] PROGMEM                = " Pos ";
+const char MSG_AVAIL[] PROGMEM              = " Available ";
 const char MSG_TRACK[] PROGMEM              = " Track ";
 const char MSG_ALBUM[] PROGMEM              = " Album ";
 const char MSG_MAXTRACK[] PROGMEM           = " Max Track ";
 const char MSG_MAXALBUM[] PROGMEM           = " Max Album ";
-const char MSG_READ_TRACK[] PROGMEM           = " Reading Track ";
+const char MSG_READ_TRACK[] PROGMEM         = " Reading Track ";
 
 // For the breakout, you can use any 2 or 3 pins
 // These pins will also work for the 1.8" TFT shield
@@ -71,15 +74,17 @@ const char MSG_READ_TRACK[] PROGMEM           = " Reading Track ";
 #define BUTTON_GPIO_ALBUM_BWD  4
 
 #define IDX_LINE_LENGTH 24
+#define MAX_ALBUMS 50
 
 int currentAlbum;
 int currentTrack;
 int currentMaxTrack;
 int maxAlbum;
+int albumOffsets[MAX_ALBUMS];
 
 byte buttonPressed;
 char trackpath[IDX_LINE_LENGTH + 1];
-char idxpath[IDX_LINE_LENGTH + 1];
+char albumpath[IDX_LINE_LENGTH + 1];
 
 // Option 1 (recommended): must use the hardware SPI pins
 // (for UNO thats sclk = 13 and sid = 11) and pin 10 must be
@@ -90,9 +95,10 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS,  TFT_DC, TFT_RST);
 // create mp3 maker shield object
 Adafruit_VS1053_FilePlayer musicPlayer = Adafruit_VS1053_FilePlayer(SHIELD_RESET, SHIELD_CS, SHIELD_DCS, DREQ, CARDCS);
 
-void setup() {  
+void setup() {
   Serial.begin(9600);
-  delay(100);  
+  delay(200);
+  mp3player_dbg(__LINE__, MSG_SETUP);
 
   tft.initR(INITR_144GREENTAB);   // initialize a ST7735S chip, black tab
   delay(500);
@@ -108,12 +114,11 @@ void setup() {
     mp3player_fatal(__LINE__, ERR_NO_SD_CARD);
   }
   currentTrack = 0;
-  currentAlbum = 0;
-  mp3player_dbg(__LINE__, MSG_NEW_INDEX);
+  currentAlbum = 0;  
   maxAlbum = updateIndex("/");
   mp3player_dbgi(__LINE__, MSG_MAXALBUM, maxAlbum);
-  char* album = getIndexEntry("/", currentAlbum);
-  currentMaxTrack = updateIndex(album);  
+  getIndexEntry("/", currentAlbum, &albumpath[0]);
+  currentMaxTrack = updateIndex(albumpath);  
   
   // Set volume for left, right channels. lower numbers == louder volume!
   musicPlayer.setVolume(10,10);
@@ -204,8 +209,8 @@ void handleUserAction(byte action) {
         if (currentAlbum > maxAlbum) {
           currentAlbum = 0;        
         }        
-        char* album = getIndexEntry("/", currentAlbum);
-        currentMaxTrack = updateIndex(album);
+        getIndexEntry("/", currentAlbum, &albumpath[0]);
+        currentMaxTrack = updateIndex(albumpath);
       }
     }
     if (action == BUTTON_GPIO_ALBUM_BWD) {
@@ -222,8 +227,8 @@ void handleUserAction(byte action) {
         if (currentAlbum < 0) {
           currentAlbum = maxAlbum;
         }        
-        char* album = getIndexEntry("/", currentAlbum);
-        currentMaxTrack = updateIndex(album);
+        getIndexEntry("/", currentAlbum, &albumpath[0]);
+        currentMaxTrack = updateIndex(albumpath);
       }
     }
   }
@@ -236,44 +241,67 @@ void resetButtons() {
   buttonPressed = 0;
 }
 
-char* getIndexEntry(const char* path, int number) {
+File getIndexFile(const char* dir, uint8_t mode = FILE_READ) {
+  char idxpath[IDX_LINE_LENGTH];
+  idxpath[0] = '/';
+  size_t len = 1;
+  if (strcmp(dir, "/") != 0) {
+    // not root dir  
+    strcpy(&idxpath[0], dir);    
+    len = strlen(dir);
+    idxpath[len++] = '/';
+  }  
+  strcpy(&idxpath[len], "_IDX/");
+  SD.mkdir(&idxpath[0]);
+  strcpy(&idxpath[len+5], "_FILES");
+  mp3player_dbg(__LINE__, MSG_PATH, &idxpath[0]);
+  return SD.open(idxpath, mode);
+}
+
+void getIndexEntry(const char* path, int number, char* returnVal) {
   // read path from index
-  char* f = getIndexFile(path);
-  File fIdx = SD.open(f);  
-  fIdx.seek((IDX_LINE_LENGTH + 3) * number);
-  mp3player_dbgi(__LINE__, MSG_POS, fIdx.position());
-  fIdx.read(&trackpath[0], IDX_LINE_LENGTH);
+  char s[IDX_LINE_LENGTH];
+  File fIdx = getIndexFile(path);  
+  fIdx.seek((IDX_LINE_LENGTH + 3) * number);  
+  if (fIdx.position() == -1) {
+    mp3player_fatal(__LINE__, ERR_SEEK_FAILED, number);
+  } else {
+    mp3player_dbgi(__LINE__, MSG_POS, fIdx.position());
+  }
+  int available = fIdx.available();
+  mp3player_dbgi(__LINE__, MSG_AVAIL, available);
+  fIdx.read(&s[0], IDX_LINE_LENGTH - 1);
+  s[IDX_LINE_LENGTH - 1] = 0;
   fIdx.close();  
-  mp3player_dbg(__LINE__, MSG_PATH, &trackpath[0]);
-  trim(trackpath);
-  mp3player_dbg(__LINE__, MSG_PATH, &trackpath[0]);
-  return &trackpath[0];
+  mp3player_dbg(__LINE__, MSG_PATH, &s[0]);
+  trim(s);
+  mp3player_dbg(__LINE__, MSG_PATH, &s[0]);
+  strcpy(returnVal, &s[0]);  
 }
 
 const char* getCurrentTrackpath() {  
   bool last = false;
-  char* album = getIndexEntry("/", currentAlbum);  
+  getIndexEntry("/", currentAlbum, &albumpath[0]);  
   if (currentTrack == 0){
-    bmpDrawCover(album);
+    bmpDrawCover(albumpath);
   }
   mp3player_dbgi(__LINE__, MSG_READ_TRACK, currentTrack);
-  char* track = getIndexEntry(album, currentTrack);  
-  return track;  
+  getIndexEntry(&albumpath[0], currentTrack, &trackpath[0]);  
+  return &trackpath[0];  
 }
 
 int updateIndex(const char* dir) {
   int count = -1;
   int len = 0;
   // create a new index
-  char* f = getIndexFile(dir);
-  File currentDir = SD.open(dir);
-  mp3player_dbg(__LINE__, MSG_NEW_INDEX, f);
-  File fIdx = SD.open(f, FILE_WRITE | O_TRUNC);
+  mp3player_dbg(__LINE__, MSG_NEW_INDEX, dir);
+  File currentDir = SD.open(dir);  
+  File fIdx = getIndexFile(dir, FILE_WRITE | O_TRUNC);
   while (true) {
     File t = currentDir.openNextFile();    
     if (!t) {
       // last file reached
-      mp3player_dbg(__LINE__, MSG_CLOSING_INDEX, f);
+      mp3player_dbg(__LINE__, MSG_CLOSING_INDEX, dir);
       break;
     }
     mp3player_dbg(__LINE__, MSG_OPEN_FILE, t.name());
@@ -286,7 +314,7 @@ int updateIndex(const char* dir) {
       fIdx.print('/');
       fIdx.print(t.name());
       len = 2 + strlen(currentDir.name()) + strlen(t.name());
-    } else if (t.isDirectory() && strcmp(t.name(), "SYSTEM~1") != 0) {
+    } else if (t.isDirectory() && strcmp(t.name(), "SYSTEM~1") != 0 && strcmp(t.name(), "_IDX") != 0) {
       count++;
       // in rootDir all directories
       mp3player_dbgi(__LINE__, MSG_WRITE_INDEX, count);
@@ -307,23 +335,10 @@ int updateIndex(const char* dir) {
     // close file
     t.close();
   }
+  fIdx.flush();
   fIdx.close();
   currentDir.close();
   return count;
-}
-
-char* getIndexFile(const char* dir) {
-  idxpath[0] = '/';
-  size_t len = 1;
-  if (strcmp(dir, "/") != 0) {
-    // not root dir  
-    strcpy(&idxpath[0], dir);    
-    len = strlen(dir);
-    idxpath[len++] = '/';
-  }  
-  strcpy(&idxpath[len], "_IDX");
-  mp3player_dbg(__LINE__, MSG_PATH, &idxpath[0]);
-  return &idxpath[0];
 }
 
 void bmpDrawCover(const char* dir) {
@@ -355,6 +370,11 @@ void mp3player_fatal(const int numb, const char msg[]) {
 
 void mp3player_fatal(const int numb, const char msg[], const char *param) {
   mp3player_dbg(numb, msg, param);
+  while(1);
+}
+
+void mp3player_fatal(const int numb, const char msg[], long param) {
+  mp3player_dbgi(numb, msg, param);
   while(1);
 }
 
