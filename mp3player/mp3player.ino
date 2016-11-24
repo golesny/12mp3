@@ -111,7 +111,7 @@ void setup() {
   mp3player_dbgi(__LINE__, MSG_MAXALBUM, maxAlbum);
   
   // Set volume for left, right channels. lower numbers == louder volume!
-  musicPlayer.setVolume(10,10);
+  musicPlayer.setVolume(50,50);
   
   // This option uses a pin interrupt. No timers required! But DREQ
   // must be on an interrupt pin. For Uno/Duemilanove/Diecimilla
@@ -169,6 +169,10 @@ void waitForButtonOrTrackEnd() {
       buttonPressed = BUTTON_GPIO_ALBUM_BWD;
       mp3player_dbg(__LINE__, MSG_BUTTON, "|<");
     }
+  }
+  // if track has ended play next
+  if (buttonPressed == 0 && !musicPlayer.playingMusic) {
+    buttonPressed = BUTTON_GPIO_TRACK_FWD;
   }
   handleUserAction(buttonPressed);
 }
