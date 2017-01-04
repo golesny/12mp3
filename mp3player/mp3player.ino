@@ -7,6 +7,9 @@
 #include <SD.h>
 #include <avr/pgmspace.h>
 
+// uncomment to turn off DEBUG
+#define DEBUG 1
+
 // strings
 const char ERR_NO_VS1053[] PROGMEM          = " No VS1053";
 const char ERR_BMP_NOT_RECOGNIZED[] PROGMEM = " BMP format not recognized.";
@@ -88,10 +91,12 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS,  TFT_DC, TFT_RST);
 Adafruit_VS1053_FilePlayer musicPlayer = Adafruit_VS1053_FilePlayer(SHIELD_RESET, SHIELD_CS, SHIELD_DCS, DREQ, CARDCS);
 
 void setup() {
+  #if defined(DEBUG)
   Serial.begin(9600);
   delay(200);
+  #endif
   mp3player_dbg(__LINE__, MSG_SETUP);
-
+ 
   tft.initR(INITR_144GREENTAB);   // initialize a ST7735S chip, black tab
   delay(500);
   tftInitScreen();
@@ -379,6 +384,7 @@ void mp3player_fatal(const int numb, const char msg[], long param) {
 }
 
 void mp3player_dbg(const int lineno, const char msg[]) {
+  #if defined(DEBUG)
   Serial.print(lineno);
   Serial.print(":");
   char c;
@@ -386,9 +392,11 @@ void mp3player_dbg(const int lineno, const char msg[]) {
     Serial.write(c);   // und ausgeben
   }
   Serial.write('\n');  // neue Zeile
+  #endif
 }
 
 void mp3player_dbg(const int lineno, const char msg[], const char *param) {
+  #if defined(DEBUG)
   Serial.print(lineno);
   Serial.print(":");
   char c;
@@ -396,9 +404,11 @@ void mp3player_dbg(const int lineno, const char msg[], const char *param) {
     Serial.write(c);   // und ausgeben
   }
   Serial.println(param);  // neue Zeile
+  #endif
 }
 
 void mp3player_dbgi(const int lineno, const char msg[], long param) {
+  #if defined(DEBUG)
   Serial.print(lineno);
   Serial.print(":");
   char c;
@@ -406,6 +416,7 @@ void mp3player_dbgi(const int lineno, const char msg[], long param) {
     Serial.write(c);   // und ausgeben
   }
   Serial.println(param);  // neue Zeile
+  #endif
 }
 
 int EndsWith(const char *str, const char *suffix)
