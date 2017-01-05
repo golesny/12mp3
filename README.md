@@ -6,6 +6,9 @@ Buttons:
 - Track Bwd
 - Album Fwd
 - Album Bwd
+Actions:
+- Volume +:   Album Bwd + Track Bwd + Album Fwd
+- Volume -: Album Bwd + Track Bwd + Track Fwd
 
 ## Hardware
  - Arduino Uno R3
@@ -23,3 +26,8 @@ https://github.com/golesny/12mp3/tree/master/mp3player
  - https://www.arduino.cc/en/Reference/SD
  - https://github.com/adafruit/Adafruit_VS1053_Library/blob/master/Adafruit_VS1053.h
  - https://www.hoerbert.com/
+ 
+## Problems
+ - Noise with connected speakers
+ https://forums.adafruit.com/viewtopic.php?f=22&t=108913
+ Solution: Not yet

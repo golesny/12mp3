@@ -43,6 +43,7 @@ const char MSG_ALBUM[] PROGMEM              = " Album ";
 const char MSG_OFFSET[] PROGMEM             = " Offset ";
 const char MSG_MAXALBUM[] PROGMEM           = " Max Album ";
 const char MSG_READ_TRACK[] PROGMEM         = " Reading Track ";
+const char MSG_VOLUME[] PROGMEM             = " volume ";
 
 // For the breakout, you can use any 2 or 3 pins
 // These pins will also work for the 1.8" TFT shield
@@ -62,21 +63,32 @@ const char MSG_READ_TRACK[] PROGMEM         = " Reading Track ";
 #define DREQ 3       // VS1053 Data request, ideally an Interrupt pin
 
 // my own pins
-#define BUTTON_GPIO_TRACK_FWD  1
-#define BUTTON_GPIO_TRACK_BWD  2
-#define BUTTON_GPIO_ALBUM_FWD  3
-#define BUTTON_GPIO_ALBUM_BWD  4
+#define GPIO_ALBUM_FWD  1
+#define GPIO_TRACK_FWD  2
+#define GPIO_TRACK_BWD  3
+#define GPIO_ALBUM_BWD  4
+
+// constants for actions
+#define ACTION_TRACK_FWD   0b00000001
+#define ACTION_TRACK_BWD   0b00000010
+#define ACTION_ALBUM_FWD   0b00000100
+#define ACTION_ALBUM_BWD   0b00001000
+#define ACTION_VOLUME_MASK 0b00001010
+#define ACTION_VOLUME_UP   0b00001110
+#define ACTION_VOLUME_DOWN 0b00001011
 
 #define IDX_LINE_LENGTH 24
 #define IDX_LINE_LENGTH_W_LF 26
 #define MAX_ALBUMS 20
+#define VOLUME_MAX 25
+#define VOLUME_MIN 60
 
 int currentAlbum;
 int currentTrack;
 int maxAlbum;
 int albumOffsets[MAX_ALBUMS];
+int volume = 55; 
 
-byte buttonPressed;
 char trackpath[IDX_LINE_LENGTH_W_LF];
 char albumpath[IDX_LINE_LENGTH_W_LF];
 File idxFile;
@@ -105,7 +117,7 @@ void setup() {
      mp3player_fatal(__LINE__, ERR_NO_VS1053);
   }  
 
-  musicPlayer.sineTest(0x44, 250);    // Make a tone to indicate VS1053 is working
+  //musicPlayer.sineTest(0x44, 250);    // Make a tone to indicate VS1053 is working
  
   if (!SD.begin(CARDCS)) {
     mp3player_fatal(__LINE__, ERR_NO_SD_CARD);
@@ -116,7 +128,7 @@ void setup() {
   mp3player_dbgi(__LINE__, MSG_MAXALBUM, maxAlbum);
   
   // Set volume for left, right channels. lower numbers == louder volume!
-  musicPlayer.setVolume(50,50);
+  musicPlayer.setVolume(volume,volume);
   
   // This option uses a pin interrupt. No timers required! But DREQ
   // must be on an interrupt pin. For Uno/Duemilanove/Diecimilla
@@ -126,12 +138,11 @@ void setup() {
   if (! musicPlayer.useInterrupt(VS1053_FILEPLAYER_PIN_INT)) {
     mp3player_fatal(__LINE__, ERR_DREQ_PIN);
   }
-  resetButtons();
   // setup pins
-  musicPlayer.GPIO_pinMode(BUTTON_GPIO_TRACK_FWD, INPUT);
-  musicPlayer.GPIO_pinMode(BUTTON_GPIO_TRACK_BWD, INPUT);
-  musicPlayer.GPIO_pinMode(BUTTON_GPIO_ALBUM_FWD, INPUT);
-  musicPlayer.GPIO_pinMode(BUTTON_GPIO_ALBUM_BWD, INPUT);
+  musicPlayer.GPIO_pinMode(GPIO_TRACK_FWD, INPUT);
+  musicPlayer.GPIO_pinMode(GPIO_TRACK_BWD, INPUT);
+  musicPlayer.GPIO_pinMode(GPIO_ALBUM_FWD, INPUT);
+  musicPlayer.GPIO_pinMode(GPIO_ALBUM_BWD, INPUT);
   // open Index File
   idxFile = getIndexFile(FILE_READ);
   mp3player_dbgi(__LINE__, MSG_AVAIL, idxFile.available());
@@ -155,31 +166,48 @@ void loop() {
   delay(250); 
 }
 
-void waitForButtonOrTrackEnd() {  
-  resetButtons();
-  while (buttonPressed == 0 && musicPlayer.playingMusic) {
-    if (musicPlayer.GPIO_digitalRead(BUTTON_GPIO_TRACK_FWD) == HIGH) {
-      buttonPressed = BUTTON_GPIO_TRACK_FWD;
-      mp3player_dbg(__LINE__, MSG_BUTTON, ">");      
+void waitForButtonOrTrackEnd() {
+  int timesToWait = 3;
+  byte userAction = 0;
+  bool isVolumeModPressed = false;
+  // to give the user the possibility the press multiple buttons we wait a bit after a button press
+  while ( (userAction == 0 && timesToWait > 0) || isVolumeModPressed ) {
+    if (musicPlayer.GPIO_digitalRead(GPIO_TRACK_FWD) == HIGH) {
+      userAction |= ACTION_TRACK_FWD; // write the bit
+      mp3player_dbg(__LINE__, MSG_BUTTON, ">");
     }
-    if (musicPlayer.GPIO_digitalRead(BUTTON_GPIO_TRACK_BWD) == HIGH) {
-      buttonPressed = BUTTON_GPIO_TRACK_BWD;
+    if (musicPlayer.GPIO_digitalRead(GPIO_TRACK_BWD) == HIGH) {
+      userAction |= ACTION_TRACK_BWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, "<");
     }
-    if (musicPlayer.GPIO_digitalRead(BUTTON_GPIO_ALBUM_FWD) == HIGH) {
-      buttonPressed = BUTTON_GPIO_ALBUM_FWD;
+    if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_FWD) == HIGH) {
+      userAction |= ACTION_ALBUM_FWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, ">|");
     }
-    if (musicPlayer.GPIO_digitalRead(BUTTON_GPIO_ALBUM_BWD) == HIGH) {
-      buttonPressed = BUTTON_GPIO_ALBUM_BWD;
+    if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_BWD) == HIGH) {
+      userAction |= ACTION_ALBUM_BWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, "|<");
+    }    
+    // if track has ended play next
+    if (userAction == 0 && !musicPlayer.playingMusic) {
+      userAction = ACTION_TRACK_FWD;
+      // we break the loop here to play the next file
+      timesToWait = 0;
+      isVolumeModPressed = false;
     }
-  }
-  // if track has ended play next
-  if (buttonPressed == 0 && !musicPlayer.playingMusic) {
-    buttonPressed = BUTTON_GPIO_TRACK_FWD;
-  }
-  handleUserAction(buttonPressed);
+    // if a button was pressed we wait some time and check if another button is pressed
+    if (userAction != 0) {
+      timesToWait--;
+      delay(100);
+    }
+    if ( userAction & ACTION_VOLUME_MASK ) {
+      isVolumeModPressed = true;
+      // for a volume action we don't break the loop
+      handleUserAction(userAction);
+      userAction = 0;      
+    }
+  }  
+  handleUserAction(userAction);
 }
 
 int getOffset(int albumNo, int lineNo) {
@@ -204,27 +232,27 @@ boolean hasLastTrackReached(int albumNo, int trackNo) {
 
 void handleUserAction(byte action) {
   // handle user action
-  if (action > 0) {    
-    if (action == BUTTON_GPIO_TRACK_FWD) {
+  if (action > 0) {
+    if (action == ACTION_TRACK_FWD) {
       currentTrack++;
       if (hasLastTrackReached(currentAlbum, currentTrack)) {
-        action = BUTTON_GPIO_ALBUM_FWD;
+        action = ACTION_ALBUM_FWD;
       }
     }
-    if (action == BUTTON_GPIO_TRACK_BWD) {
+    if (action == ACTION_TRACK_BWD) {
       currentTrack--;
       if (currentTrack < 0) {
-        action = BUTTON_GPIO_ALBUM_BWD;
+        action = ACTION_ALBUM_BWD;
       }
     }
-    if (action == BUTTON_GPIO_ALBUM_FWD) {
+    if (action == ACTION_ALBUM_FWD) {
       currentTrack = 0;
       currentAlbum++;
       if (currentAlbum > maxAlbum) {
         currentAlbum = 0;
       }
     }
-    if (action == BUTTON_GPIO_ALBUM_BWD) {
+    if (action == ACTION_ALBUM_BWD) {
       currentTrack = 0;
       currentAlbum--;        
       // overflow detection
@@ -232,13 +260,26 @@ void handleUserAction(byte action) {
         currentAlbum = maxAlbum;
       }      
     }
-  }
-  mp3player_dbgi(__LINE__, MSG_ALBUM, currentAlbum);
-  mp3player_dbgi(__LINE__, MSG_TRACK, currentTrack);
-}
-
-void resetButtons() {
-  buttonPressed = 0;
+    if (action == ACTION_VOLUME_UP) {
+      volume -= 3; // decrease means louder
+      if (volume < VOLUME_MAX) {
+        volume = VOLUME_MAX;        
+      }
+      mp3player_dbgi(__LINE__, MSG_VOLUME, volume);
+      musicPlayer.setVolume(volume,volume);
+    } else
+    if (action == ACTION_VOLUME_DOWN) {
+      volume += 3; // increase means more quiet
+      if (volume > VOLUME_MIN) {
+        volume = VOLUME_MIN;        
+      }
+      mp3player_dbgi(__LINE__, MSG_VOLUME, volume);
+      musicPlayer.setVolume(volume,volume);
+    } else if (! (action & ACTION_VOLUME_MASK) ) {
+      mp3player_dbgi(__LINE__, MSG_ALBUM, currentAlbum);
+      mp3player_dbgi(__LINE__, MSG_TRACK, currentTrack);
+    }
+  }  
 }
 
 File getIndexFile(uint8_t mode) {
