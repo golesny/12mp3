@@ -20,6 +20,7 @@ const char ERR_NO_FILES_FOUND[] PROGMEM     = " No files found ";
 const char ERR_SEEK_FAILED[] PROGMEM        = " seek in file failed to pos ";
 
 const char MSG_SETUP[] PROGMEM              = " setup";
+const char MSG_SKIP_INDEX_CREATE[] PROGMEM  = " skipping index creation. /_IDX already exists.";
 const char MSG_LOADING[] PROGMEM            = " Loading:";
 const char MSG_DEBUG[] PROGMEM              = "DEBUG:";
 const char MSG_FATAL[] PROGMEM              = "FATAL:";
@@ -105,13 +106,15 @@ Adafruit_VS1053_FilePlayer musicPlayer = Adafruit_VS1053_FilePlayer(SHIELD_RESET
 void setup() {
   #if defined(DEBUG)
   Serial.begin(9600);
-  delay(200);
+  delay(100);
   #endif
   mp3player_dbg(__LINE__, MSG_SETUP);
+  
+  if (!SD.begin(CARDCS)) {
+    mp3player_fatal(__LINE__, ERR_NO_SD_CARD);
+  }
  
   tft.initR(INITR_144GREENTAB);   // initialize a ST7735S chip, black tab
-  delay(500);
-  tftInitScreen();
   // initialise the music player
   if (! musicPlayer.begin()) { // initialise the music player
      mp3player_fatal(__LINE__, ERR_NO_VS1053);
@@ -119,9 +122,6 @@ void setup() {
 
   //musicPlayer.sineTest(0x44, 250);    // Make a tone to indicate VS1053 is working
  
-  if (!SD.begin(CARDCS)) {
-    mp3player_fatal(__LINE__, ERR_NO_SD_CARD);
-  }
   currentTrack = 0;
   currentAlbum = 0;
   updateIndex();
@@ -318,6 +318,10 @@ const char* getCurrentTrackpath() {
 }
 
 void updateIndex() {
+  if (SD.exists("/_IDX")) {
+    mp3player_dbg(__LINE__, MSG_SKIP_INDEX_CREATE);
+    return;
+  }
   int len = 0;
   int offset = 0;
   int albumNo = -1;  
@@ -396,30 +400,35 @@ void bmpDrawCover(const char* dir) {
   bmpDraw(coverpath, 0, 0);
 }
 
-void tftInitScreen() {  
-  tft.fillScreen(ST7735_BLACK);
-  tft.fillRoundRect(25, 10, 78, 60, 8, ST7735_WHITE);
-  tft.fillTriangle(42, 20, 42, 60, 90, 40, ST7735_RED);
-}
-
-void testdrawtext(const char *text, uint16_t color) {
+/* 
+ * text*  
+ * color examples: ST7735_WHITE, ST7735_BLACK
+ */
+void tft_text(const char msg[], uint16_t color) {
+  tft.fillScreen(ST7735_RED);
   tft.setCursor(0, 0);
   tft.setTextColor(color);
   tft.setTextWrap(true);
-  tft.print(text);
+  char c;
+  while((c = pgm_read_byte(msg++))) { // read all chars
+    tft.print(c);   // and print
+  }  
 }
 
 void mp3player_fatal(const int numb, const char msg[]) {
+  tft_text(msg, ST7735_WHITE);
   mp3player_dbg(numb, msg);
   while(1);
 }
 
 void mp3player_fatal(const int numb, const char msg[], const char *param) {
+  tft_text(msg, ST7735_WHITE);
   mp3player_dbg(numb, msg, param);
   while(1);
 }
 
 void mp3player_fatal(const int numb, const char msg[], long param) {
+  tft_text(msg, ST7735_WHITE);
   mp3player_dbgi(numb, msg, param);
   while(1);
 }
@@ -430,9 +439,9 @@ void mp3player_dbg(const int lineno, const char msg[]) {
   Serial.print(":");
   char c;
   while((c = pgm_read_byte(msg++))) { // alle chars lesen
-    Serial.write(c);   // und ausgeben
+    Serial.write(c);
   }
-  Serial.write('\n');  // neue Zeile
+  Serial.write('\n');
   #endif
 }
 
@@ -441,10 +450,10 @@ void mp3player_dbg(const int lineno, const char msg[], const char *param) {
   Serial.print(lineno);
   Serial.print(":");
   char c;
-  while((c = pgm_read_byte(msg++))) { // alle chars lesen
-    Serial.write(c);   // und ausgeben
+  while((c = pgm_read_byte(msg++))) { // read all chars
+    Serial.write(c);
   }
-  Serial.println(param);  // neue Zeile
+  Serial.println(param);
   #endif
 }
 
@@ -453,10 +462,10 @@ void mp3player_dbgi(const int lineno, const char msg[], long param) {
   Serial.print(lineno);
   Serial.print(":");
   char c;
-  while((c = pgm_read_byte(msg++))) { // alle chars lesen
-    Serial.write(c);   // und ausgeben
+  while((c = pgm_read_byte(msg++))) { // read all chars
+    Serial.write(c);
   }
-  Serial.println(param);  // neue Zeile
+  Serial.println(param);
   #endif
 }
 
