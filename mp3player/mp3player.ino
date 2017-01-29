@@ -1,4 +1,4 @@
-// #include <EEPROM.h>
+#include <EEPROM.h>
 #include <Arduino.h>  // for type definitions
 #include <Adafruit_GFX.h>    // Core graphics library
 #include <Adafruit_ST7735.h> // Hardware-specific library
@@ -9,6 +9,18 @@
 
 // uncomment to turn off DEBUG
 #define DEBUG 1
+
+#define MAX_ALBUMS 50 // will consume 2 bytes * MAX_ALBUMS of dynamic memory (Idea, if we need more mem: save offsets in a second fixed length file _OFFSETS on SD card)
+
+// struct to persist the config in the EEPROM
+struct state_t
+{
+    int track;
+    int album;
+    int maxAlbum;
+    int idxLen;
+    int albumOffsets[MAX_ALBUMS];
+} state;
 
 // strings
 const char ERR_NO_VS1053[] PROGMEM          = " No VS1053";
@@ -45,6 +57,8 @@ const char MSG_OFFSET[] PROGMEM             = " Offset ";
 const char MSG_MAXALBUM[] PROGMEM           = " Max Album ";
 const char MSG_READ_TRACK[] PROGMEM         = " Reading Track ";
 const char MSG_VOLUME[] PROGMEM             = " volume ";
+const char MSG_SAVE_STATE[] PROGMEM         = " save state";
+const char MSG_SHUTDOWN[] PROGMEM         = " shutdown";
 
 // For the breakout, you can use any 2 or 3 pins
 // These pins will also work for the 1.8" TFT shield
@@ -68,26 +82,23 @@ const char MSG_VOLUME[] PROGMEM             = " volume ";
 #define GPIO_TRACK_FWD  2
 #define GPIO_TRACK_BWD  3
 #define GPIO_ALBUM_BWD  4
+#define GPIO_SHUTDOWN   5
 
 // constants for actions
 #define ACTION_TRACK_FWD   0b00000001
 #define ACTION_TRACK_BWD   0b00000010
 #define ACTION_ALBUM_FWD   0b00000100
 #define ACTION_ALBUM_BWD   0b00001000
-#define ACTION_VOLUME_MASK 0b00001010
 #define ACTION_VOLUME_UP   0b00001110
 #define ACTION_VOLUME_DOWN 0b00001011
 
 #define IDX_LINE_LENGTH 24
 #define IDX_LINE_LENGTH_W_LF 26
-#define MAX_ALBUMS 20
 #define VOLUME_MAX 25
 #define VOLUME_MIN 60
 
 int currentAlbum;
 int currentTrack;
-int maxAlbum;
-int albumOffsets[MAX_ALBUMS];
 int volume = 55; 
 
 char trackpath[IDX_LINE_LENGTH_W_LF];
@@ -121,11 +132,15 @@ void setup() {
   }  
 
   //musicPlayer.sineTest(0x44, 250);    // Make a tone to indicate VS1053 is working
- 
-  currentTrack = 0;
-  currentAlbum = 0;
+
+  if (EEPROM_readAnything(0, state) > 0) {
+    currentTrack = state.track;
+    currentAlbum = state.album;    
+  } else {
+    currentTrack = 0;
+    currentAlbum = 0;
+  }
   updateIndex();
-  mp3player_dbgi(__LINE__, MSG_MAXALBUM, maxAlbum);
   
   // Set volume for left, right channels. lower numbers == louder volume!
   musicPlayer.setVolume(volume,volume);
@@ -143,11 +158,15 @@ void setup() {
   musicPlayer.GPIO_pinMode(GPIO_TRACK_BWD, INPUT);
   musicPlayer.GPIO_pinMode(GPIO_ALBUM_FWD, INPUT);
   musicPlayer.GPIO_pinMode(GPIO_ALBUM_BWD, INPUT);
+  musicPlayer.GPIO_pinMode(GPIO_SHUTDOWN, OUTPUT);
   // open Index File
   idxFile = getIndexFile(FILE_READ);
   mp3player_dbgi(__LINE__, MSG_AVAIL, idxFile.available());
 }
 
+/**
+ * Main prog loop
+ */
 void loop() {
   mp3player_dbg(__LINE__, MSG_LOOP_START);
   
@@ -166,57 +185,75 @@ void loop() {
   delay(250); 
 }
 
+void saveState() {
+  mp3player_dbg(__LINE__, MSG_SAVE_STATE);
+  state.album = currentAlbum;
+  state.track = currentTrack;
+  EEPROM_writeAnything(0, state);
+}
+
+void shutdownNow() {
+  mp3player_dbg(__LINE__, MSG_SHUTDOWN);
+  musicPlayer.GPIO_digitalWrite(GPIO_SHUTDOWN, HIGH);
+}
+
 void waitForButtonOrTrackEnd() {
-  int timesToWait = 3;
   byte userAction = 0;
-  bool isVolumeModPressed = false;
-  // to give the user the possibility the press multiple buttons we wait a bit after a button press
-  while ( (userAction == 0 && timesToWait > 0) || isVolumeModPressed ) {
-    if (musicPlayer.GPIO_digitalRead(GPIO_TRACK_FWD) == HIGH) {
-      userAction |= ACTION_TRACK_FWD; // write the bit
-      mp3player_dbg(__LINE__, MSG_BUTTON, ">");
+  while ( userAction == 0 ) {
+    if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_BWD) == HIGH) {
+      userAction |= ACTION_ALBUM_BWD; // write the bit
+      mp3player_dbg(__LINE__, MSG_BUTTON, "|<");
+      mp3player_dbgi(__LINE__, MSG_BUTTON, userAction);
+      delay(200); // we wait for another volume button
     }
     if (musicPlayer.GPIO_digitalRead(GPIO_TRACK_BWD) == HIGH) {
       userAction |= ACTION_TRACK_BWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, "<");
-    }
+      mp3player_dbgi(__LINE__, MSG_BUTTON, userAction);
+      delay(200); // we wait for another volume button
+    } 
+    if (musicPlayer.GPIO_digitalRead(GPIO_TRACK_FWD) == HIGH) {
+      userAction |= ACTION_TRACK_FWD; // write the bit
+      mp3player_dbg(__LINE__, MSG_BUTTON, ">");
+      delay(200); // we wait for another volume button
+    }    
     if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_FWD) == HIGH) {
       userAction |= ACTION_ALBUM_FWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, ">|");
+      delay(200); // we wait for another volume button
     }
-    if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_BWD) == HIGH) {
-      userAction |= ACTION_ALBUM_BWD; // write the bit
-      mp3player_dbg(__LINE__, MSG_BUTTON, "|<");
-    }    
-    // if track has ended play next
-    if (userAction == 0 && !musicPlayer.playingMusic) {
-      userAction = ACTION_TRACK_FWD;
-      // we break the loop here to play the next file
-      timesToWait = 0;
-      isVolumeModPressed = false;
-    }
-    // if a button was pressed we wait some time and check if another button is pressed
-    if (userAction != 0) {
-      timesToWait--;
-      delay(100);
-    }
-    if ( userAction & ACTION_VOLUME_MASK ) {
-      isVolumeModPressed = true;
+    // volume up/down
+    if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_BWD) == HIGH && musicPlayer.GPIO_digitalRead(GPIO_TRACK_BWD) == HIGH) {
+      mp3player_dbg(__LINE__, MSG_BUTTON, "volumeModPressed");      
       // for a volume action we don't break the loop
       handleUserAction(userAction);
-      userAction = 0;      
+      userAction = 0;
+      delay(350);
     }
-  }  
-  handleUserAction(userAction);
+    // if track has ended play next w/o user action
+    if (userAction == 0 && !musicPlayer.playingMusic) {
+      // play the next track
+      userAction = ACTION_TRACK_FWD;
+      // if the album is at the end we shutdown the player
+      // next startup the player will start at the next album (that why we handleUserAction first)
+      if (hasLastTrackReached(currentAlbum, currentTrack)) {        
+        handleUserAction(userAction);
+        saveState();
+        shutdownNow();
+      }
+    }    
+  } // loop end
+  mp3player_dbg(__LINE__, MSG_BUTTON, "loop end");
+  handleUserAction(userAction);  
 }
 
 int getOffset(int albumNo, int lineNo) {
-  return albumOffsets[albumNo] + (IDX_LINE_LENGTH_W_LF) * lineNo;
+  return state.albumOffsets[albumNo] + IDX_LINE_LENGTH_W_LF * lineNo;
 }
 
 boolean hasLastTrackReached(int albumNo, int trackNo) {
   int offsetOfNextAlbum;
-  if (albumNo == maxAlbum) {
+  if (albumNo == state.maxAlbum) {
     offsetOfNextAlbum = idxFile.size();
   } else {
     offsetOfNextAlbum = getOffset(albumNo + 1, 0);
@@ -224,7 +261,7 @@ boolean hasLastTrackReached(int albumNo, int trackNo) {
   int offset = getOffset(albumNo, trackNo + 1) + IDX_LINE_LENGTH_W_LF; 
   mp3player_dbgi(__LINE__, MSG_OFFSET, offset);
   mp3player_dbgi(__LINE__, MSG_OFFSET, offsetOfNextAlbum);
-  if (offset > offsetOfNextAlbum) {
+  if (offset == offsetOfNextAlbum) {
     return true;
   }
   return false;
@@ -233,10 +270,11 @@ boolean hasLastTrackReached(int albumNo, int trackNo) {
 void handleUserAction(byte action) {
   // handle user action
   if (action > 0) {
-    if (action == ACTION_TRACK_FWD) {
-      currentTrack++;
+    if (action == ACTION_TRACK_FWD) {      
       if (hasLastTrackReached(currentAlbum, currentTrack)) {
         action = ACTION_ALBUM_FWD;
+      } else {
+        currentTrack++;
       }
     }
     if (action == ACTION_TRACK_BWD) {
@@ -248,7 +286,7 @@ void handleUserAction(byte action) {
     if (action == ACTION_ALBUM_FWD) {
       currentTrack = 0;
       currentAlbum++;
-      if (currentAlbum > maxAlbum) {
+      if (currentAlbum > state.maxAlbum) {
         currentAlbum = 0;
       }
     }
@@ -257,29 +295,33 @@ void handleUserAction(byte action) {
       currentAlbum--;        
       // overflow detection
       if (currentAlbum < 0) {
-        currentAlbum = maxAlbum;
+        currentAlbum = state.maxAlbum;
       }      
     }
+    // volume actions
     if (action == ACTION_VOLUME_UP) {
-      volume -= 3; // decrease means louder
+      volume -= 5; // decrease means louder
       if (volume < VOLUME_MAX) {
         volume = VOLUME_MAX;        
       }
       mp3player_dbgi(__LINE__, MSG_VOLUME, volume);
       musicPlayer.setVolume(volume,volume);
-    } else
-    if (action == ACTION_VOLUME_DOWN) {
-      volume += 3; // increase means more quiet
+    }
+    else if (action == ACTION_VOLUME_DOWN) {
+      volume += 5; // increase means more quiet
       if (volume > VOLUME_MIN) {
         volume = VOLUME_MIN;        
       }
       mp3player_dbgi(__LINE__, MSG_VOLUME, volume);
       musicPlayer.setVolume(volume,volume);
-    } else if (! (action & ACTION_VOLUME_MASK) ) {
+    }
+    // debug and save state only if non-volume action
+    else if (! (action & ACTION_ALBUM_BWD && action & ACTION_TRACK_BWD) ) {
       mp3player_dbgi(__LINE__, MSG_ALBUM, currentAlbum);
       mp3player_dbgi(__LINE__, MSG_TRACK, currentTrack);
+      saveState();
     }
-  }  
+  }
 }
 
 File getIndexFile(uint8_t mode) {
@@ -307,10 +349,8 @@ void getIndexEntry(int albumNo, int trackNo, char* returnVal) {
 const char* getCurrentTrackpath() {  
   bool last = false;
   // first entry is the album path  
-  if (currentTrack == 0){
-    getIndexEntry(currentAlbum, 0, &trackpath[0]);
-    bmpDrawCover(trackpath);
-  }
+  getIndexEntry(currentAlbum, 0, &trackpath[0]);
+  bmpDrawCover(trackpath);  
   // read track path
   getIndexEntry(currentAlbum, currentTrack + 1, &trackpath[0]);
   mp3player_dbgi(__LINE__, MSG_READ_TRACK, currentTrack);  
@@ -318,10 +358,22 @@ const char* getCurrentTrackpath() {
 }
 
 void updateIndex() {
-  if (SD.exists("/_IDX")) {
-    mp3player_dbg(__LINE__, MSG_SKIP_INDEX_CREATE);
-    return;
+  
+  // check if file must be recreated  
+  if (SD.exists("/_IDX") && state.idxLen > 0) {
+    File idxFile = getIndexFile(FILE_READ);
+    int len = idxFile.available();
+    idxFile.close();
+    if (len == state.idxLen) {
+      // ok, saved len is equals (we assume that the file is ok)
+      mp3player_dbg(__LINE__, MSG_SKIP_INDEX_CREATE);      
+      return;
+    }
   }
+  // reset state
+  state.idxLen = 0;
+  saveState();
+  // start generation
   int len = 0;
   int offset = 0;
   int albumNo = -1;  
@@ -350,7 +402,7 @@ void updateIndex() {
         if (EndsWithMp3(track.name())) {
           if (!dirEntryWritten) {
             // a directory must have at least 1 np3 to be indexed
-            albumOffsets[++albumNo] = offset;
+            state.albumOffsets[++albumNo] = offset;
             mp3player_dbgi(__LINE__, MSG_ALBUM, albumNo);
             mp3player_dbgi(__LINE__, MSG_OFFSET, offset);
             // print album path
@@ -362,7 +414,7 @@ void updateIndex() {
               len++;
             }
             fIdx.println("");
-            offset += (IDX_LINE_LENGTH_W_LF);
+            offset += IDX_LINE_LENGTH_W_LF;
             dirEntryWritten = true;
           }
           // all MP3s in album
@@ -376,7 +428,7 @@ void updateIndex() {
             len++;
           }
           fIdx.println("");
-          offset += (IDX_LINE_LENGTH_W_LF);
+          offset += IDX_LINE_LENGTH_W_LF;
         } else {
           mp3player_dbg(__LINE__, MSG_IGNORING, track.name());
         }
@@ -386,9 +438,14 @@ void updateIndex() {
       mp3player_dbg(__LINE__, MSG_IGNORING, albumDir.name());
     }
   }
+  // to check if update index process has been aborted we save the length of the file
+  fIdx.seek(0);
+  state.idxLen = fIdx.available();
   fIdx.close();
   rootDir.close();
-  maxAlbum = albumNo;
+  state.maxAlbum = albumNo;
+  mp3player_dbgi(__LINE__, MSG_MAXALBUM, state.maxAlbum);
+  saveState();
 }
 
 void bmpDrawCover(const char* dir) {
@@ -625,4 +682,23 @@ size_t trim(char* s) {
     //memmove(s, p, len + 1);
     return len;
 }
+
+template <class T> int EEPROM_writeAnything(int ee, const T& value)
+{
+    const byte* p = (const byte*)(const void*)&value;
+    unsigned int i;
+    for (i = 0; i < sizeof(value); i++)
+          EEPROM.write(ee++, *p++);
+    return i;
+}
+
+template <class T> int EEPROM_readAnything(int ee, T& value)
+{
+    byte* p = (byte*)(void*)&value;
+    unsigned int i;
+    for (i = 0; i < sizeof(value); i++)
+          *p++ = EEPROM.read(ee++);
+    return i;
+}
+
 
