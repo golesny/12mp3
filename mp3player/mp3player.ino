@@ -99,6 +99,7 @@ const char MSG_SHUTDOWN[] PROGMEM         = " shutdown";
 
 int currentAlbum;
 int currentTrack;
+bool forceCoverPaint = true; // on start-up cover must be painted
 int volume = 55; 
 
 char trackpath[IDX_LINE_LENGTH_W_LF];
@@ -169,11 +170,14 @@ void setup() {
  */
 void loop() {
   mp3player_dbg(__LINE__, MSG_LOOP_START);
-  
+
+  // stop
   if (musicPlayer.playingMusic) {
     mp3player_dbg(__LINE__, MSG_STOP_PLAY, musicPlayer.currentTrack.name());
     musicPlayer.stopPlaying();
   }
+  // play
+  tftPrintTrackPositionUnmarked(currentTrack, true);
   const char* trackpath = getCurrentTrackpath();
   mp3player_dbg(__LINE__, MSG_START_PLAY, trackpath);
   if (! musicPlayer.startPlayingFile(trackpath)) {
@@ -270,39 +274,45 @@ boolean hasLastTrackReached(int albumNo, int trackNo) {
 void handleUserAction(byte action) {
   // handle user action
   if (action > 0) {
-    if (action == ACTION_TRACK_FWD) {      
+    if (action == ACTION_TRACK_FWD) {
       if (hasLastTrackReached(currentAlbum, currentTrack)) {
         action = ACTION_ALBUM_FWD;
       } else {
-        currentTrack++;
+        tftPrintTrackPositionUnmarked(currentTrack, false);
+        currentTrack++;        
       }
     }
     if (action == ACTION_TRACK_BWD) {
+      tftPrintTrackPositionUnmarked(currentTrack, false);
       currentTrack--;
       if (currentTrack < 0) {
         action = ACTION_ALBUM_BWD;
+      } else {
+        tftPrintTrackPositionUnmarked(currentTrack, false);
       }
     }
     if (action == ACTION_ALBUM_FWD) {
       currentTrack = 0;
       currentAlbum++;
+      forceCoverPaint = true;
       if (currentAlbum > state.maxAlbum) {
         currentAlbum = 0;
       }
     }
     if (action == ACTION_ALBUM_BWD) {
       currentTrack = 0;
-      currentAlbum--;        
+      currentAlbum--;
+      forceCoverPaint = true;
       // overflow detection
       if (currentAlbum < 0) {
         currentAlbum = state.maxAlbum;
-      }      
+      }
     }
     // volume actions
     if (action == ACTION_VOLUME_UP) {
       volume -= 5; // decrease means louder
       if (volume < VOLUME_MAX) {
-        volume = VOLUME_MAX;        
+        volume = VOLUME_MAX;
       }
       mp3player_dbgi(__LINE__, MSG_VOLUME, volume);
       musicPlayer.setVolume(volume,volume);
@@ -449,13 +459,16 @@ void updateIndex() {
 }
 
 void bmpDrawCover(const char* dir) {
-  char coverpath[20];  
-  strcpy(&coverpath[0], dir);
-  size_t len = strlen(dir);
-  coverpath[len] = '/';
-  strcpy(&coverpath[len+1], "cover.bmp");
-  bmpDraw(coverpath, 0, 0);
-  tftPrintTrackPositionMarker();
+  if (forceCoverPaint) {
+    char coverpath[20];
+    strcpy(&coverpath[0], dir);
+    size_t len = strlen(dir);
+    coverpath[len] = '/';
+    strcpy(&coverpath[len+1], "cover.bmp");
+    bmpDraw(coverpath, 0, 0);
+    tftPrintTrackPositionMarker();
+    forceCoverPaint = false;
+  }  
 }
 
 /*
@@ -465,52 +478,46 @@ void bmpDrawCover(const char* dir) {
           +---+
 */
 void tftPrintTrackPositionMarker() {
-  for (int i=0; i<5; i++) {
-    int pos = 14+8+i*20;
-    // top
+  for (int i=0; i<20; i++) {    
     if (!hasLastTrackReached(currentAlbum, i-1)) {
-      tftPrintTrackPositionUnmarked(pos, 0);
-    }
-    // right
-    if (!hasLastTrackReached(currentAlbum, 4+i)) {
-      tftPrintTrackPositionUnmarked(124, pos);
-    }
-    // bottom
-    if (!hasLastTrackReached(currentAlbum, 9+i)) {
-      pos = 14+8+(4-i)*20;
-      tftPrintTrackPositionUnmarked(pos, 124);
-    }
-    // left
-    if (!hasLastTrackReached(currentAlbum, 14+i)) {
-      pos = 14+8+(4-i)*20;
-      tftPrintTrackPositionUnmarked(0, pos);
-    }
+      tftPrintTrackPositionUnmarked(i, false);
+    }    
   }
   // draw the current track marker
-  int sidePos = currentTrack % 5;
-  if (currentTrack >= 10) {
-    // bottom and left we have to start at left/bottom
-    sidePos = 4 - sidePos;
-  }
-  int pos = 14+8+sidePos*20;
-  if (currentTrack < 5) {
-    tft.fillRect(pos, 0, 5, 5, ST7735_RED);
-    tft.drawRect(pos, 0, 5, 5, ST7735_BLACK);
-  } else if (currentTrack < 10) {
-    tft.fillRect(124, pos, 5, 5, ST7735_RED);
-    tft.drawRect(124, pos, 5, 5, ST7735_BLACK);
-  } else if (currentTrack < 15) {
-    tft.fillRect(pos, 124, 5, 5, ST7735_RED);
-    tft.drawRect(pos, 124, 5, 5, ST7735_BLACK);
-  } else if (currentTrack < 20) {
-    tft.fillRect(0, pos, 5, 5, ST7735_RED);
-    tft.drawRect(0, pos, 5, 5, ST7735_BLACK);
-  }
+  tftPrintTrackPositionUnmarked(currentTrack, true);
 }
 
-void tftPrintTrackPositionUnmarked(int pos, int y) {
-  tft.fillRect(pos, y, 5, 5, ST7735_WHITE);
-  tft.drawRect(pos, y, 5, 5, ST7735_BLACK);
+void tftPrintTrackPositionUnmarked(int no, bool active) {  
+  uint16_t colorFill;
+  int pos = no % 5;
+  if (no >= 10) {
+    // bottom and left we have to start at left/bottom
+    pos = 4 - pos;
+  }
+  pos = 14+8+pos*20;
+  int x;
+  int y;
+  if (no < 5) {
+    x = pos;
+    y = 0;
+  } else if (no < 10) {
+    x = 124;
+    y = pos;
+  } else if (no < 15) {
+    x = pos;
+    y = 124;
+  } else if (no < 20) {
+    x = 0;
+    y = pos;
+  }
+  if (active) {
+    // http://www.barth-dev.de/online/rgb565-color-picker/
+    colorFill = 0x0600;
+  } else {
+    colorFill = ST7735_WHITE;
+  }
+  tft.fillRect(x, y, 5, 5, colorFill);
+  tft.drawRect(x, y, 5, 5, ST7735_BLACK);
 }
 
 /* 
