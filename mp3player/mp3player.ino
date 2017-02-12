@@ -261,7 +261,7 @@ boolean hasLastTrackReached(int albumNo, int trackNo) {
   int offset = getOffset(albumNo, trackNo + 1) + IDX_LINE_LENGTH_W_LF; 
   mp3player_dbgi(__LINE__, MSG_OFFSET, offset);
   mp3player_dbgi(__LINE__, MSG_OFFSET, offsetOfNextAlbum);
-  if (offset == offsetOfNextAlbum) {
+  if (offset >= offsetOfNextAlbum) {
     return true;
   }
   return false;
@@ -455,6 +455,62 @@ void bmpDrawCover(const char* dir) {
   coverpath[len] = '/';
   strcpy(&coverpath[len+1], "cover.bmp");
   bmpDraw(coverpath, 0, 0);
+  tftPrintTrackPositionMarker();
+}
+
+/*
+   +-- 14 +-.-+ 20 --.-- 20 --.-- .... --.-- 14 --+
+          |   |
+          |   |
+          +---+
+*/
+void tftPrintTrackPositionMarker() {
+  for (int i=0; i<5; i++) {
+    int pos = 14+8+i*20;
+    // top
+    if (!hasLastTrackReached(currentAlbum, i-1)) {
+      tftPrintTrackPositionUnmarked(pos, 0);
+    }
+    // right
+    if (!hasLastTrackReached(currentAlbum, 4+i)) {
+      tftPrintTrackPositionUnmarked(124, pos);
+    }
+    // bottom
+    if (!hasLastTrackReached(currentAlbum, 9+i)) {
+      pos = 14+8+(4-i)*20;
+      tftPrintTrackPositionUnmarked(pos, 124);
+    }
+    // left
+    if (!hasLastTrackReached(currentAlbum, 14+i)) {
+      pos = 14+8+(4-i)*20;
+      tftPrintTrackPositionUnmarked(0, pos);
+    }
+  }
+  // draw the current track marker
+  int sidePos = currentTrack % 5;
+  if (currentTrack >= 10) {
+    // bottom and left we have to start at left/bottom
+    sidePos = 4 - sidePos;
+  }
+  int pos = 14+8+sidePos*20;
+  if (currentTrack < 5) {
+    tft.fillRect(pos, 0, 5, 5, ST7735_RED);
+    tft.drawRect(pos, 0, 5, 5, ST7735_BLACK);
+  } else if (currentTrack < 10) {
+    tft.fillRect(124, pos, 5, 5, ST7735_RED);
+    tft.drawRect(124, pos, 5, 5, ST7735_BLACK);
+  } else if (currentTrack < 15) {
+    tft.fillRect(pos, 124, 5, 5, ST7735_RED);
+    tft.drawRect(pos, 124, 5, 5, ST7735_BLACK);
+  } else if (currentTrack < 20) {
+    tft.fillRect(0, pos, 5, 5, ST7735_RED);
+    tft.drawRect(0, pos, 5, 5, ST7735_BLACK);
+  }
+}
+
+void tftPrintTrackPositionUnmarked(int pos, int y) {
+  tft.fillRect(pos, y, 5, 5, ST7735_WHITE);
+  tft.drawRect(pos, y, 5, 5, ST7735_BLACK);
 }
 
 /* 
