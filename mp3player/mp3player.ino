@@ -83,6 +83,8 @@ const char MSG_SHUTDOWN[] PROGMEM         = " shutdown";
 #define GPIO_TRACK_BWD  3
 #define GPIO_ALBUM_BWD  4
 #define GPIO_SHUTDOWN   5
+#define DIG_IO_POWER_ON 5
+
 
 // constants for actions
 #define ACTION_TRACK_FWD   0b00000001
@@ -116,6 +118,10 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS,  TFT_DC, TFT_RST);
 Adafruit_VS1053_FilePlayer musicPlayer = Adafruit_VS1053_FilePlayer(SHIELD_RESET, SHIELD_CS, SHIELD_DCS, DREQ, CARDCS);
 
 void setup() {
+  // we have to set these pins first that the power switch is turned off (by setting ON to HIGH)
+  pinMode(DIG_IO_POWER_ON, OUTPUT);
+  digitalWrite(DIG_IO_POWER_ON, HIGH);
+
   #if defined(DEBUG)
   Serial.begin(9600);
   delay(100);
@@ -160,6 +166,7 @@ void setup() {
   musicPlayer.GPIO_pinMode(GPIO_ALBUM_FWD, INPUT);
   musicPlayer.GPIO_pinMode(GPIO_ALBUM_BWD, INPUT);
   musicPlayer.GPIO_pinMode(GPIO_SHUTDOWN, OUTPUT);
+  musicPlayer.GPIO_digitalWrite(GPIO_SHUTDOWN, LOW);
   // open Index File
   idxFile = getIndexFile(FILE_READ);
   mp3player_dbgi(__LINE__, MSG_AVAIL, idxFile.available());
@@ -198,6 +205,7 @@ void saveState() {
 
 void shutdownNow() {
   mp3player_dbg(__LINE__, MSG_SHUTDOWN);
+  digitalWrite(DIG_IO_POWER_ON, LOW);
   musicPlayer.GPIO_digitalWrite(GPIO_SHUTDOWN, HIGH);
 }
 
