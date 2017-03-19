@@ -58,7 +58,8 @@ const char MSG_MAXALBUM[] PROGMEM           = " Max Album ";
 const char MSG_READ_TRACK[] PROGMEM         = " Reading Track ";
 const char MSG_VOLUME[] PROGMEM             = " volume ";
 const char MSG_SAVE_STATE[] PROGMEM         = " save state";
-const char MSG_SHUTDOWN[] PROGMEM         = " shutdown";
+const char MSG_SHUTDOWN[] PROGMEM           = " shutdown";
+const char MSG_ACTION[] PROGMEM             = " action ";
 
 // For the breakout, you can use any 2 or 3 pins
 // These pins will also work for the 1.8" TFT shield
@@ -93,6 +94,7 @@ const char MSG_SHUTDOWN[] PROGMEM         = " shutdown";
 #define ACTION_ALBUM_BWD   0b00001000
 #define ACTION_VOLUME_UP   0b00001110
 #define ACTION_VOLUME_DOWN 0b00001011
+#define ACTION_SHUTDOWN    0b00001100
 
 #define IDX_LINE_LENGTH 24
 #define IDX_LINE_LENGTH_W_LF 26
@@ -209,54 +211,87 @@ void shutdownNow() {
   musicPlayer.GPIO_digitalWrite(GPIO_SHUTDOWN, HIGH);
 }
 
-void waitForButtonOrTrackEnd() {
+byte getUserAction(int* btCount) {
   byte userAction = 0;
-  while ( userAction == 0 ) {
-    if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_BWD) == HIGH) {
+  if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_BWD) == HIGH) {
       userAction |= ACTION_ALBUM_BWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, "|<");
-      mp3player_dbgi(__LINE__, MSG_BUTTON, userAction);
-      delay(200); // we wait for another volume button
+      *btCount += 1;
     }
     if (musicPlayer.GPIO_digitalRead(GPIO_TRACK_BWD) == HIGH) {
       userAction |= ACTION_TRACK_BWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, "<");
-      mp3player_dbgi(__LINE__, MSG_BUTTON, userAction);
-      delay(200); // we wait for another volume button
+      *btCount += 1;
     } 
     if (musicPlayer.GPIO_digitalRead(GPIO_TRACK_FWD) == HIGH) {
       userAction |= ACTION_TRACK_FWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, ">");
-      delay(200); // we wait for another volume button
+      *btCount += 1;
     }    
     if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_FWD) == HIGH) {
       userAction |= ACTION_ALBUM_FWD; // write the bit
       mp3player_dbg(__LINE__, MSG_BUTTON, ">|");
-      delay(200); // we wait for another volume button
+      *btCount += 1;
     }
-    // volume up/down
-    if (musicPlayer.GPIO_digitalRead(GPIO_ALBUM_BWD) == HIGH && musicPlayer.GPIO_digitalRead(GPIO_TRACK_BWD) == HIGH) {
-      mp3player_dbg(__LINE__, MSG_BUTTON, "volumeModPressed");      
-      // for a volume action we don't break the loop
-      handleUserAction(userAction);
-      userAction = 0;
-      delay(350);
+    if (userAction != 0) {
+      mp3player_dbgi(__LINE__, MSG_ACTION, userAction);
+      mp3player_dbgi(__LINE__, MSG_BUTTON, *btCount);
     }
-    // if track has ended play next w/o user action
-    if (userAction == 0 && !musicPlayer.playingMusic) {
+    return userAction;
+}
+
+void waitForButtonOrTrackEnd() {
+  byte savedUserAction = 0;
+  int btCount = 0;
+  bool exitLoop = false;
+  unsigned long lastMultiButtonTS = 0;
+  while ( ! exitLoop ) {
+    btCount = 0;
+    byte userAction = getUserAction(&btCount);
+    // check that button has been released
+    if (btCount == 0) {
+      if (savedUserAction != 0) {
+        // buttons released --> leave loop only if user action shall be executed
+        handleUserAction(savedUserAction);
+        exitLoop = true;
+      } else {
+        delay(100);
+      }
+    } else if (btCount == 1) {
+      if ((lastMultiButtonTS + 1000) < millis()) { // after a special command, we ignore one button commands 1 sec
+        mp3player_dbgi(__LINE__, MSG_BUTTON, btCount);
+        // single button action (save until button is released)
+        savedUserAction = userAction;
+        delay(200);
+      }
+    } else {
+      // multi button action
+      if (userAction == ACTION_SHUTDOWN) {
+        saveState();
+        shutdownNow();
+      } else if (userAction == ACTION_VOLUME_UP || userAction == ACTION_VOLUME_DOWN) {
+        handleUserAction(userAction);
+        // don't leave the loop
+        savedUserAction = 0;
+        lastMultiButtonTS = millis();
+        delay(350);
+      }
+    } // end special actions
+
+    // if track has ended playing
+    if (!musicPlayer.playingMusic) {
       // play the next track
       userAction = ACTION_TRACK_FWD;
-      // if the album is at the end we shutdown the player
+      // if the album is at the end of an album we shutdown the player
       // next startup the player will start at the next album (that why we handleUserAction first)
       if (hasLastTrackReached(currentAlbum, currentTrack)) {        
         handleUserAction(userAction);
         saveState();
         shutdownNow();
       }
-    }    
-  } // loop end
+    }
+  }
   mp3player_dbg(__LINE__, MSG_BUTTON, "loop end");
-  handleUserAction(userAction);  
 }
 
 int getOffset(int albumNo, int lineNo) {
