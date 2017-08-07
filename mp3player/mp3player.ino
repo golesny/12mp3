@@ -288,6 +288,9 @@ void waitForButtonOrTrackEnd() {
         handleUserAction(userAction);
         saveState();
         shutdownNow();
+      } else {
+        handleUserAction(userAction);
+        exitLoop = true;
       }
     }
   }
