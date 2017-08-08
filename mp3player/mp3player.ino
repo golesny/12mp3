@@ -9,6 +9,8 @@
 
 // uncomment to turn off DEBUG
 #define DEBUG 1
+// while coding you can force reindexing the SD card
+#define FORCE_REINDEX false
 
 #define MAX_ALBUMS 50 // will consume 2 bytes * MAX_ALBUMS of dynamic memory (Idea, if we need more mem: save offsets in a second fixed length file _OFFSETS on SD card)
 
@@ -30,12 +32,14 @@ const char ERR_NO_SD_CARD[] PROGMEM         = " SD not found!";
 const char ERR_DREQ_PIN[] PROGMEM           = " DREQ not an interrupt!";
 const char ERR_NO_FILES_FOUND[] PROGMEM     = " No files found ";
 const char ERR_SEEK_FAILED[] PROGMEM        = " seek in file failed to pos ";
+const char ERR_INDEX_FAILED[] PROGMEM       = " failed to create the index";
 
 const char MSG_SETUP[] PROGMEM              = " setup";
 const char MSG_SKIP_INDEX_CREATE[] PROGMEM  = " skipping index creation. /_IDX already exists.";
 const char MSG_LOADING[] PROGMEM            = " Loading:";
 const char MSG_DEBUG[] PROGMEM              = "DEBUG:";
 const char MSG_FATAL[] PROGMEM              = "FATAL:";
+const char MSG_FORCE_REINDEX[] PROGMEM      = " Force reindexing ";
 
 const char MSG_LOOP_START[] PROGMEM         = "======";
 const char MSG_PATH[] PROGMEM               = " path: ";
@@ -47,7 +51,7 @@ const char MSG_STOP_PLAY[] PROGMEM          = " Stop playing ";
 const char MSG_BUTTON[] PROGMEM             = " Button: ";
 const char MSG_NEW_INDEX[] PROGMEM          = " Creating new index ";
 const char MSG_CLOSING_INDEX[] PROGMEM      = " Closing index ";
-const char MSG_OPEN_FILE[] PROGMEM          = " Open file ";
+const char MSG_OPEN_FILE[] PROGMEM          = " :::: Open file :::: ";
 const char MSG_CLOSE_FILE[] PROGMEM         = " Closing file ";
 const char MSG_POS[] PROGMEM                = " Pos ";
 const char MSG_AVAIL[] PROGMEM              = " Available ";
@@ -99,12 +103,13 @@ const char MSG_ACTION[] PROGMEM             = " action ";
 #define IDX_LINE_LENGTH 24
 #define IDX_LINE_LENGTH_W_LF 26
 #define VOLUME_MAX 25
+#define VOLUME_INIT 50
 #define VOLUME_MIN 60
 
 int currentAlbum;
 int currentTrack;
 bool forceCoverPaint = true; // on start-up cover must be painted
-int volume = 55; 
+int volume = VOLUME_INIT;
 
 char trackpath[IDX_LINE_LENGTH_W_LF];
 char albumpath[IDX_LINE_LENGTH_W_LF];
@@ -414,9 +419,12 @@ const char* getCurrentTrackpath() {
 }
 
 void updateIndex() {
-  
-  // check if file must be recreated  
-  if (SD.exists("/_IDX") && state.idxLen > 0) {
+  if (FORCE_REINDEX) {
+    mp3player_dbg(__LINE__, MSG_FORCE_REINDEX);
+    SD.remove("/_IDX");
+  }
+  // check if file must be recreated
+  if ( FORCE_REINDEX != true && SD.exists("/_IDX") && state.idxLen > 0) {
     File idxFile = getIndexFile(FILE_READ);
     int len = idxFile.available();
     idxFile.close();
@@ -445,7 +453,7 @@ void updateIndex() {
       break;
     }
     mp3player_dbg(__LINE__, MSG_OPEN_FILE, albumDir.name());
-    if (albumDir.isDirectory() && strcmp(albumDir.name(), "SYSTEM~1") != 0) {      
+    if (albumDir.isDirectory() && strcmp(albumDir.name(), "SYSTEM~1") != 0) {
       // in rootDir each dir is an album
       boolean dirEntryWritten = false;
       while (true) {
@@ -455,9 +463,9 @@ void updateIndex() {
           break;
         }
         mp3player_dbg(__LINE__, MSG_TRACK, track.name());
-        if (EndsWithMp3(track.name())) {
+        if (IsValidFileExtension(track.name())) {
           if (!dirEntryWritten) {
-            // a directory must have at least 1 np3 to be indexed
+            // a directory must have at least 1 song to be indexed
             state.albumOffsets[++albumNo] = offset;
             mp3player_dbgi(__LINE__, MSG_ALBUM, albumNo);
             mp3player_dbgi(__LINE__, MSG_OFFSET, offset);
@@ -490,6 +498,8 @@ void updateIndex() {
         }
         track.close();
       }
+      mp3player_dbg(__LINE__, MSG_CLOSING, albumDir.name());
+      albumDir.close();
     } else {
       mp3player_dbg(__LINE__, MSG_IGNORING, albumDir.name());
     }
@@ -501,6 +511,9 @@ void updateIndex() {
   rootDir.close();
   state.maxAlbum = albumNo;
   mp3player_dbgi(__LINE__, MSG_MAXALBUM, state.maxAlbum);
+  if (state.idxLen == 0 || state.maxAlbum == -1) {
+    mp3player_fatal(__LINE__, ERR_INDEX_FAILED);
+  }
   saveState();
 }
 
@@ -647,7 +660,9 @@ int EndsWith(const char *str, const char *suffix)
     return strncmp(str + lenstr - lensuffix, suffix, lensuffix) == 0;
 }
 
-int EndsWithMp3(const char *str) { return EndsWith(str, ".MP3"); }
+int IsValidFileExtension(const char *str) {
+  return EndsWith(str, ".MP3") || EndsWith(str, ".M4A");
+}
 
 /* copied from Example */
 // This function opens a Windows Bitmap (BMP) file and
